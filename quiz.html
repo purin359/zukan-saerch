@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>説明文クイズ</title>
+
+<style>
+body{
+  font-family:sans-serif;
+  padding:16px;
+  max-width:600px;
+  margin:auto;
+}
+
+input,select,button{
+  font-size:16px;
+  padding:10px;
+  margin:5px 0;
+  box-sizing:border-box;
+}
+
+button{
+  background:#4CAF50;
+  color:white;
+  border:none;
+  border-radius:8px;
+  cursor:pointer;
+}
+
+.selectRow{
+  display:flex;
+  gap:8px;
+  margin-bottom:8px;
+}
+
+.selectRow select{
+  flex:1;
+  width:100%;
+}
+
+.scoreRow{
+  display:flex;
+  gap:20px;
+  margin:8px 0;
+  font-weight:bold;
+}
+
+#finalOnlyWrap{
+  margin:8px 0;
+}
+
+#desc{
+  border:1px solid #ccc;
+  padding:12px;
+  margin:10px 0;
+  min-height:120px;
+  white-space:pre-wrap;
+  background:#fafafa;
+}
+
+#answer{
+  width:100%;
+}
+
+#suggest{
+  border:1px solid #ccc;
+  max-height:150px;
+  overflow-y:auto;
+}
+
+.sugItem{
+  padding:6px;
+  cursor:pointer;
+}
+
+.sugItem:hover{
+  background:#eee;
+}
+
+.answerBtnWrap{
+  text-align:center;
+}
+
+#answerBtn{
+  min-width:120px;
+}
+
+.correct{
+  color:blue;
+  font-weight:bold;
+}
+
+.wrong{
+  color:red;
+  font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<h2>説明文クイズ</h2>
+
+<div class="selectRow">
+  <select id="typeSelect" onchange="resetQuiz()">
+    <option value="ally">味方</option>
+    <option value="enemy">敵</option>
+  </select>
+
+  <select id="raritySelect" onchange="resetQuiz()">
+    <option value="all">全て(レアリティ)</option>
+    <option value="basic">基本</option>
+    <option value="ex">EX</option>
+    <option value="rare">レア</option>
+    <option value="superrare">激レア</option>
+    <option value="ultrarare">超激レア</option>
+    <option value="legendrare">伝説レア</option>
+  </select>
+
+  <select id="collabFilter" onchange="resetQuiz()">
+    <option value="all">全て</option>
+    <option value="0">常設</option>
+    <option value="1">コラボ</option>
+  </select>
+
+  <select id="gameModeSelect" onchange="resetQuiz()">
+    <option value="endless">エンドレス</option>
+    <option value="complete">コンプリート</option>
+  </select>
+</div>
+
+<div id="finalOnlyWrap">
+  <label>
+    <input type="checkbox" id="finalOnly">
+    最上位形態のみ
+  </label>
+</div>
+
+<div class="scoreRow">
+  <span>スコア：<span id="score">0</span></span>
+  <span>最高記録：<span id="best">0</span></span>
+</div>
+
+<div id="timerRow" style="display:none; text-align:center; margin:8px 0; position:relative;">
+  <span>タイム：<span id="timer">00:00</span></span>
+  <span id="remainCount" style="position:absolute; right:0;">0/0</span>
+</div>
+
+<div id="desc">読み込み中...</div>
+
+<input id="answer" placeholder="キャラ名を入力">
+<div id="suggest"></div>
+
+<div class="answerBtnWrap">
+  <button id="answerBtn" onclick="answerButton()">回答</button>
+</div>
+
+<div id="result"></div>
+
+<script>
+let quizList = [];
+let suggestList = [];
+let current = null;
+let score = 0;
+let waitingNext = false;
+let gameMode = "endless";
+let completeList = [];
+let answeredCodes = new Set();
+let timerId = null;
+let startTime = 0;
+let elapsedTime = 0;
+let isCleared = false;
+
+// ===== 正規化 =====
+function normalize(str){
+  return (str || "")
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[ぁ-ん]/g, ch =>
+      String.fromCharCode(ch.charCodeAt(0) + 0x60)
+    )
+    .replace(/\s+/g, "")
+    .replace(/　/g, "");
+}
+
+// ===== ID生成 =====
+function getAllyIdString(ch, form, index){
+  const idStr = String(ch.id ?? "").padStart(3, "0");
+
+  let stage;
+  if(form.stage !== undefined){
+    stage = Number(form.stage) - 1;
+  }else{
+    stage = index;
+  }
+
+  return `${idStr}-${stage}`;
+}
+
+function getEnemyIdString(f){
+  return String(f.id ?? "");
+}
+
+// ===== 表示切替 =====
+function updateControlVisibility(){
+  const type = document.getElementById("typeSelect").value;
+  const raritySelect = document.getElementById("raritySelect");
+  const finalOnlyWrap = document.getElementById("finalOnlyWrap");
+  const collabFilter = document.getElementById("collabFilter");
+
+  if(type === "enemy"){
+    raritySelect.disabled = true;
+    collabFilter.disabled = true;
+    finalOnlyWrap.style.display = "none";
+
+    raritySelect.value = "all";
+    collabFilter.value = "all";
+  }else{
+    raritySelect.disabled = false;
+    collabFilter.disabled = false;
+    finalOnlyWrap.style.display = "block";
+  }
+}
+
+// ===== データ取得 =====
+async function loadData(){
+  const type = document.getElementById("typeSelect").value;
+  const rarity = document.getElementById("raritySelect").value;
+  const collabFilter = document.getElementById("collabFilter").value;
+  const finalOnly = document.getElementById("finalOnly").checked;
+
+  quizList = [];
+
+  if(type === "enemy"){
+    const enemy = await fetch("enemy.json")
+      .then(r => r.json())
+      .catch(() => []);
+
+    quizList = enemy
+      .filter(f => f.name && f.description)
+      .map(f => ({
+        name: f.name,
+        desc: f.description || "",
+        code: getEnemyIdString(f),
+        collab: f.collab ?? 0
+      }));
+
+  }else{
+    const fileMap = {
+      basic:"basic.json",
+      ex:"ex.json",
+      rare:"rare.json",
+      superrare:"superrare.json",
+      ultrarare:"ultrarare.json",
+      legendrare:"legendrare.json"
+    };
+
+    const files =
+      rarity === "all"
+        ? Object.values(fileMap)
+        : [fileMap[rarity]];
+
+    const loaded = await Promise.all(
+      files.map(file =>
+        fetch(file).then(r => r.json()).catch(() => [])
+      )
+    );
+
+    const ally = loaded.flat();
+
+    quizList = ally.flatMap(ch => {
+      let forms = ch.forms || [];
+
+      if(finalOnly && forms.length > 0){
+        forms = [forms[forms.length - 1]];
+      }
+
+      return forms
+        .filter(f => f.name && f.description)
+        .map((f, index) => ({
+          name: f.name,
+          desc: f.description || "",
+          code: getAllyIdString(ch, f, index),
+          collab: ch.collab ?? 0
+        }));
+    });
+  }
+
+  if(collabFilter !== "all"){
+    quizList = quizList.filter(q => String(q.collab) === collabFilter);
+  }
+
+  suggestList = quizList.map(q => q.name);
+}
+
+// ===== 問題表示 =====
+function nextQuestion(){
+  waitingNext = false;
+  document.getElementById("answerBtn").innerText = "回答";
+
+  if(gameMode === "complete"){
+    const remaining = completeList.filter(q => !answeredCodes.has(q.code));
+
+    updateRemainCount();
+
+    if(remaining.length === 0){
+      clearCompleteMode();
+      return;
+    }
+
+    current = remaining[Math.floor(Math.random() * remaining.length)];
+  }else{
+    if(quizList.length === 0){
+      current = null;
+      document.getElementById("desc").innerText = "問題データがありません";
+      document.getElementById("answer").value = "";
+      document.getElementById("suggest").innerHTML = "";
+      return;
+    }
+
+    current = quizList[Math.floor(Math.random() * quizList.length)];
+  }
+
+  document.getElementById("desc").innerText = current.desc;
+  document.getElementById("answer").value = "";
+  document.getElementById("suggest").innerHTML = "";
+  document.getElementById("result").innerHTML = "";
+  document.getElementById("answer").focus();
+}
+  
+// ===== 回答ボタン =====
+function answerButton(){
+  if(waitingNext){
+    if(gameMode === "complete"){
+      resetTimer();
+      answeredCodes = new Set();
+      updateRemainCount();
+    }
+
+    nextQuestion();
+
+    if(gameMode === "complete"){
+      startTimer();
+    }
+
+    return;
+  }
+
+  check();
+}
+  
+// ===== 判定 =====
+function check(){
+  if(!current) return;
+
+  const input = document.getElementById("answer").value.trim();
+  const inputNorm = normalize(input);
+
+  const sameDescList = quizList.filter(q => q.desc === current.desc);
+
+  const matched = sameDescList.find(q =>
+    inputNorm === normalize(q.name) ||
+    inputNorm === normalize(q.code)
+  );
+
+  if(matched){
+    if(gameMode === "complete" && answeredCodes.has(matched.code)){
+      document.getElementById("result").innerHTML =
+        `<span class="wrong">その答えはすでに使用しています</span><br>別の答えを入力してください`;
+      return;
+    }
+
+    score++;
+    document.getElementById("score").innerText = score;
+
+    document.getElementById("result").innerHTML =
+      `<span class="correct">正解！</span>`;
+
+    if(gameMode === "complete"){
+  answeredCodes.add(matched.code);
+  updateRemainCount();
+  saveBest();
+}else{
+  saveBest();
+}
+
+    setTimeout(nextQuestion, 500);
+
+  }else{
+    const answers = sameDescList
+  .map(q => q.name)
+  .join(" / ");
+
+    document.getElementById("result").innerHTML =
+      `<span class="wrong">不正解</span><br>答え：${answers}`;
+
+    score = 0;
+    document.getElementById("score").innerText = 0;
+
+    if(gameMode === "complete"){
+      stopTimer();
+      answeredCodes = new Set();
+      updateRemainCount();
+    }
+
+    waitingNext = true;
+    document.getElementById("answerBtn").innerText = "次の問題";
+  }
+}
+  
+  
+// ===== サジェスト =====
+function updateSuggest(){
+  const input = document.getElementById("answer").value.trim();
+  const suggest = document.getElementById("suggest");
+
+  suggest.innerHTML = "";
+
+  if(!input) return;
+
+  const key = normalize(input);
+
+  const list = suggestList
+    .filter(name => normalize(name).includes(key))
+    .slice(0, 10);
+
+  list.forEach(name => {
+    const div = document.createElement("div");
+    div.className = "sugItem";
+    div.textContent = name;
+
+    div.onclick = () => {
+      document.getElementById("answer").value = name;
+      suggest.innerHTML = "";
+    };
+
+    suggest.appendChild(div);
+  });
+}
+
+// ===== 記録 =====
+function getKey(){
+  const type = document.getElementById("typeSelect").value;
+  const rarity = document.getElementById("raritySelect").value;
+  const collab = document.getElementById("collabFilter").value;
+  const finalOnly = document.getElementById("finalOnly").checked;
+  const mode = document.getElementById("gameModeSelect").value;
+
+  if(mode === "endless"){
+    return `descQuiz_v2_${type}_${rarity}_${collab}_${finalOnly}`;
+  }
+
+  return `descQuiz_complete_${type}_${rarity}_${collab}_${finalOnly}`;
+}
+  
+function saveBest(){
+  const key = getKey();
+
+  // ===== コンプリート =====
+  if(gameMode === "complete"){
+    const timeText = formatTime(elapsedTime);
+    const newText = isCleared
+      ? `${score}問 / タイム：${timeText}`
+      : `${score}問`;
+
+    const old = localStorage.getItem(key);
+
+    if(!old){
+      localStorage.setItem(key, newText);
+      document.getElementById("best").innerText = newText;
+      return;
+    }
+
+    const oldScoreMatch = old.match(/^(\d+)問/);
+    const oldScore = oldScoreMatch ? Number(oldScoreMatch[1]) : 0;
+
+    const oldTimeMatch = old.match(/タイム：(\d{2}:\d{2})/);
+    const oldMs = oldTimeMatch ? timeToMs(oldTimeMatch[1]) : Infinity;
+
+    // スコアが高いなら保存
+    if(score > oldScore){
+      localStorage.setItem(key, newText);
+      document.getElementById("best").innerText = newText;
+      return;
+    }
+
+    // スコア同点で、クリア済み同士ならタイムが短い方を保存
+    if(score === oldScore && isCleared && elapsedTime < oldMs){
+      localStorage.setItem(key, newText);
+      document.getElementById("best").innerText = newText;
+    }
+
+    return;
+  }
+
+  // ===== エンドレス =====
+  const best = Number(localStorage.getItem(key) || 0);
+
+  if(score > best){
+    localStorage.setItem(key, score);
+    document.getElementById("best").innerText = score;
+  }
+}
+  
+function timeToMs(text){
+  const [m, s] = text.split(":").map(Number);
+  return (m * 60 + s) * 1000;
+}
+  
+function loadBest(){
+  const key = getKey();
+  const best = localStorage.getItem(key);
+
+  if(gameMode === "complete"){
+    document.getElementById("best").innerText =
+      best ? best : "0";
+  }else{
+    document.getElementById("best").innerText =
+      Number(best || 0);
+  }
+}
+
+// ===== 開始・リセット =====
+async function startQuiz(){
+  updateControlVisibility();
+
+  gameMode = document.getElementById("gameModeSelect").value;
+
+  score = 0;
+  current = null;
+  waitingNext = false;
+  isCleared = false;
+  quizList = [];
+  suggestList = [];
+  completeList = [];
+  answeredCodes = new Set();
+
+  resetTimer();
+
+  document.getElementById("score").innerText = 0;
+  document.getElementById("best").innerText = 0;
+  document.getElementById("desc").innerText = "読み込み中...";
+  document.getElementById("answer").value = "";
+  document.getElementById("suggest").innerHTML = "";
+  document.getElementById("result").innerHTML = "";
+  document.getElementById("answerBtn").innerText = "回答";
+
+  await loadData();
+
+  completeList = [...quizList];
+
+  loadBest();
+  updateRemainCount();
+  nextQuestion();
+
+  if(gameMode === "complete"){
+    startTimer();
+  }
+}
+  
+function resetQuiz(){
+  startQuiz();
+}
+
+// ===== 初期設定 =====
+window.addEventListener("load", () => {
+  const answer = document.getElementById("answer");
+  const finalOnly = document.getElementById("finalOnly");
+
+ document.getElementById("answer").addEventListener("keydown", e => {
+  if(e.isComposing || e.keyCode === 229) return;
+
+  if(e.key === "Enter"){
+    answerButton();
+  }
+});
+
+  answer.addEventListener("input", updateSuggest);
+
+  finalOnly.addEventListener("change", startQuiz);
+
+  startQuiz();
+});
+
+  // ===== タイマー =====
+  function formatTime(ms){
+  const sec = Math.floor(ms / 1000);
+  const m = String(Math.floor(sec / 60)).padStart(2, "0");
+  const s = String(sec % 60).padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function startTimer(){
+  if(gameMode !== "complete") return;
+
+  stopTimer();
+  startTime = Date.now() - elapsedTime;
+
+  timerId = setInterval(()=>{
+    elapsedTime = Date.now() - startTime;
+    document.getElementById("timer").innerText = formatTime(elapsedTime);
+  }, 200);
+}
+
+function stopTimer(){
+  if(timerId){
+    clearInterval(timerId);
+    timerId = null;
+  }
+}
+
+function resetTimer(){
+  stopTimer();
+  elapsedTime = 0;
+  document.getElementById("timer").innerText = "00:00";
+}
+
+function updateRemainCount(){
+  const row = document.getElementById("timerRow");
+  const remain = document.getElementById("remainCount");
+
+  if(gameMode !== "complete"){
+    row.style.display = "none";
+    return;
+  }
+
+  row.style.display = "block";
+
+  const total = completeList.length;
+  const left = completeList.filter(q => !answeredCodes.has(q.code)).length;
+
+  remain.innerText = `${left}/${total}`;
+}
+
+  // ===== クリア処理 =====
+  function clearCompleteMode(){
+  stopTimer();
+  isCleared = true;
+  waitingNext = true;
+
+  document.getElementById("desc").innerText = "コンプリート！";
+  document.getElementById("answer").value = "";
+  document.getElementById("suggest").innerHTML = "";
+
+  document.getElementById("result").innerHTML =
+    `<span class="correct">クリア！</span><br>${score}問 / タイム：${formatTime(elapsedTime)}`;
+
+  document.getElementById("answerBtn").innerText = "次の問題";
+
+  saveBest();
+  updateRemainCount();
+}
+</script>
+
+</body>
+</html>

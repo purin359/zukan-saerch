@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>にゃんこ文字検索</title>
+<style>
+body{font-family:sans-serif;padding:10px;}
+.searchWrap{display:flex;gap:5px;margin-bottom:10px;}
+.searchBox{flex:1;padding:8px;font-size:16px;}
+button,select{font-size:15px;padding:8px;margin:3px;}
+#menu div{padding:5px 10px;cursor:pointer;}
+#menu div:hover{background:#eee;}
+.gradeHeader{background:#eee;padding:8px;cursor:pointer;margin-top:10px;}
+.grid{display:grid;grid-template-columns:repeat(20,1fr);gap:4px;margin-bottom:10px;}
+.char{border:1px solid #ccc;padding:10px;font-size:18px;display:flex;justify-content:center;align-items:center;}
+.char.ally{background:#dde8ff;color:blue;font-weight:bold;}
+.char.enemy{background:#ffdddd;color:red;font-weight:bold;}
+.char.both{background:#e6ccff;color:purple;font-weight:bold;}
+.hit{font-weight:bold;}
+.result{border-bottom:1px solid #ccc;padding:8px 0;}
+.result.ally{background:#dde8ff;}
+.result.enemy{background:#ffdddd;}
+.result.both{background:#e6ccff;color:purple;}
+#resultScreenInner{transform:scale(1.15);transform-origin:top left;width:86%;}
+#result{max-height:60vh;overflow-y:auto;border:1px solid #ccc;padding:5px;}
+</style>
+</head>
+
+<body>
+
+<div id="searchScreen">
+<h2 id="pageTitle">味方文字検索</h2>
+
+<select id="modeSelect" onchange="changeMode()">
+  <option value="ally">味方</option>
+  <option value="enemy">敵</option>
+  <option value="integrated">敵味方統合</option>
+</select>
+
+<div class="searchWrap">
+  <input type="text" id="searchInput" class="searchBox">
+  <button onclick="searchFromInput()">検索</button>
+</div>
+
+<div style="position:relative;margin-bottom:10px;">
+  <button onclick="toggleMenu()">･･･</button>
+  <div id="menu" style="display:none;position:absolute;background:white;border:1px solid #ccc;padding:5px;z-index:100;">
+    <div onclick="showAll()">全キャラ表示</div>
+    <div onclick="showSingleOnly()">1件のみ検索</div>
+    <div onclick="showRanking()">使用数ランキング</div>
+    <div onclick="showChecker()">新規文字チェッカー</div>
+  </div>
+</div>
+
+<div class="gradeHeader" data-base="常用漢字" onclick="toggle('gAll',this)">▼ 常用漢字</div>
+<div id="gAll">
+  <div class="gradeHeader" data-base="小学生で習う漢字" onclick="toggle('gElem',this)">▼ 小学生で習う漢字</div>
+  <div id="gElem">
+    <div class="gradeHeader" onclick="toggle('grid1',this)">▼ 1年生で習う漢字</div><div id="grid1" class="grid"></div>
+    <div class="gradeHeader" onclick="toggle('grid2',this)">▼ 2年生で習う漢字</div><div id="grid2" class="grid"></div>
+    <div class="gradeHeader" onclick="toggle('grid3',this)">▼ 3年生で習う漢字</div><div id="grid3" class="grid"></div>
+    <div class="gradeHeader" onclick="toggle('grid4',this)">▼ 4年生で習う漢字</div><div id="grid4" class="grid"></div>
+    <div class="gradeHeader" onclick="toggle('grid5',this)">▼ 5年生で習う漢字</div><div id="grid5" class="grid"></div>
+    <div class="gradeHeader" onclick="toggle('grid6',this)">▼ 6年生で習う漢字</div><div id="grid6" class="grid"></div>
+  </div>
+
+  <div class="gradeHeader" id="headerG7" onclick="toggle('g7',this)">▼ 中学生で習う漢字</div>
+  <div id="g7"><div id="grid7" class="grid"></div></div>
+</div>
+
+<div class="gradeHeader" id="headerExtra" data-base="常用漢字外" onclick="toggle('extraGrid',this)">
+▼ 常用漢字外 0種類
+</div>
+<div id="extraGrid" class="grid"></div>
+</div>
+
+<div id="checkerScreen" style="display:none;">
+  <button onclick="backFromChecker()">← 戻る</button>
+  <h2 id="checkerTitle">新規漢字チェッカー</h2>
+  <textarea id="checkerInput" style="width:100%;height:120px;"></textarea><br><br>
+  <button onclick="runChecker()">判定</button>
+  <button onclick="clearChecker()">全消し</button>
+  <div id="checkerResult" style="margin-top:10px;"></div>
+</div>
+
+<div id="resultScreen" style="display:none;">
+  <div id="resultScreenInner">
+    <button onclick="back()">← 戻る</button>
+    <h2 id="selectedText"></h2>
+    <div id="result"></div>
+  </div>
+</div>
+
+<script>
+let mode = "ally";
+let allyData = [];
+let enemyData = [];
+let data = [];
+let scrollY = 0;
+let lastMode = "home";
+let rankingScrollY = 0;
+let singleScrollY = 0;
+
+const segmenter = new Intl.Segmenter("ja",{granularity:"grapheme"});
+
+function splitChars(str){
+  return Array.from(segmenter.segment(str || ""), s => s.segment);
+}
+
+const chars1 = `
+一二三四五六七八九十百千日月火水木金土田山川林森石天気空雨夕草花竹文字本円玉年音学校先生赤白青人男女子目耳口手足犬貝虫王力町村車大中小上下左右正出入立見休早名糸
+`.replace(/\n/g, "").split("");
+
+const chars2 = `
+引羽雲園遠何科夏家歌画回会海絵外角楽活間丸岩顔汽記帰弓牛魚京強教近兄形計元言原戸古午後語工公広交光考行高黄合谷国黒今才細作算止市矢姉思紙寺自時室社弱首秋週春書少
+場色食心新親図数西声星晴切雪船線前組走多太体台地池知茶昼長鳥朝直通弟店点電刀冬当東答頭同道読内南肉馬売買麦半番父風分聞米歩母方北毎妹万明鳴毛門夜野友用曜来里理話
+`.replace(/\n/g, "").split("");
+
+const chars3 = `
+悪安暗医委意育員院飲運泳駅央横屋温化荷界開階寒感漢館岸起期客究急級宮球去橋業曲局銀区苦具君係軽血決研県庫湖向幸港号根祭皿仕死使始指歯詩次事持式実写者主守取酒受州
+拾終習集住重宿所暑助昭消商章勝乗植申身神真深進世整昔全相送想息速族他打対待代第題炭短談着注柱丁帳調追定庭笛鉄転都度投豆島湯登等動童農波配倍箱畑発反坂板皮悲美鼻筆
+氷表秒病品負部服福物平返勉放味命面問役薬由油有遊予羊洋葉陽様落流旅両緑礼列練路和
+`.replace(/\n/g, "").split("");
+  
+const chars4 = `
+愛案以衣位茨印英栄媛塩岡億加果貨課芽賀改械害街各覚潟完官管関観願岐希季旗器機議求泣給挙漁共協鏡競極熊訓軍郡群径景芸欠結建健験固功好香候康佐差菜最埼材崎昨札刷察参
+産散残氏司試児治滋辞鹿失借種周祝順初松笑唱焼照城縄臣信井成省清静席積折節説浅戦選然争倉巣束側続卒孫帯隊達単置仲沖兆低底的典伝徒努灯働特徳栃奈梨熱念敗梅博阪飯飛必
+票標不夫付府阜富副兵別辺変便包法望牧末満未民無約勇要養浴利陸良料量輪類令冷例連老労録
+`.replace(/\n/g, "").split("");
+
+const chars5 = `
+圧囲移因永営衛易益液演応往桜可仮価河過快解格確額刊幹慣眼紀基寄規喜技義逆久旧救居許境均禁句型経潔件険検限現減故個護効厚耕航鉱構興講告混査再災妻採際在財罪殺雑酸賛
+士支史志枝師資飼示似識質舎謝授修述術準序招証象賞条状常情織職制性政勢精製税責績接設絶祖素総造像増則測属率損貸態団断築貯張停提程適統堂銅導得毒独任燃能破犯判版比肥
+非費備評貧布婦武復複仏粉編弁保墓報豊防貿暴脈務夢迷綿輸余容略留領歴
+`.replace(/\n/g, "").split("");
+
+const chars6 = `
+胃異遺域宇映延沿恩我灰拡革閣割株干巻看簡危机揮貴疑吸供胸郷勤筋系敬警劇激穴券絹権憲源厳己呼誤后孝皇紅降鋼刻穀骨困砂座済裁策冊蚕至私姿視詞誌磁射捨尺若樹収宗就衆従
+縦縮熟純処署諸除承将傷障蒸針仁垂推寸盛聖誠舌宣専泉洗染銭善奏窓創装層操蔵臓存尊退宅担探誕段暖値宙忠著庁頂腸潮賃痛敵展討党糖届難乳認納脳派拝背肺俳班晩否批秘俵腹奮
+並陛閉片補暮宝訪亡忘棒枚幕密盟模訳郵優預幼欲翌乱卵覧裏律臨朗論
+`.replace(/\n/g, "").split("");
+
+const chars7 = `
+亜哀挨曖握扱宛嵐依威為畏尉萎偉椅彙違維慰緯壱逸芋咽姻淫陰隠韻唄鬱畝浦詠影鋭疫悦越謁閲炎怨宴援煙猿鉛縁艶汚凹押旺欧殴翁奥憶臆虞乙俺卸穏佳苛架華菓渦嫁暇禍靴寡箇稼蚊
+牙瓦雅餓介戒怪拐悔皆塊楷潰壊懐諧劾崖涯慨蓋該概骸垣柿核殻郭較隔獲嚇穫岳顎掛括喝渇葛滑褐轄且釜鎌刈甘汗缶肝冠陥乾勘患貫喚堪換敢棺款閑勧寛歓監緩憾還環韓艦鑑含玩頑企
+伎忌奇祈軌既飢鬼亀幾棋棄毀畿輝騎宜偽欺儀戯擬犠菊吉喫詰却脚虐及丘朽臼糾嗅窮巨拒拠虚距御凶叫狂享況峡挟狭恐恭脅矯響驚仰暁凝巾斤菌琴僅緊錦謹襟吟駆惧愚偶遇隅串屈掘窟
+繰勲薫刑茎契恵啓掲渓蛍傾携継詣慶憬稽憩鶏迎鯨隙撃桁傑肩倹兼剣拳軒圏堅嫌献遣賢謙鍵繭顕懸幻玄弦舷股虎孤弧枯雇誇鼓錮顧互呉娯悟碁勾孔巧甲江坑抗攻更拘肯侯恒洪荒郊貢控
+梗喉慌硬絞項溝綱酵稿衡購乞拷剛傲豪克酷獄駒込頃昆恨婚痕紺魂墾懇沙唆詐鎖挫采砕宰栽彩斎債催塞歳載剤削柵索酢搾錯咲刹拶撮擦桟惨傘斬暫旨伺刺祉肢施恣脂紫嗣雌摯賜諮侍慈
+餌璽軸叱疾執湿嫉漆芝赦斜煮遮邪蛇酌釈爵寂朱狩殊珠腫趣寿呪需儒囚舟秀臭袖羞愁酬醜蹴襲汁充柔渋銃獣叔淑粛塾俊瞬旬巡盾准殉循潤遵庶緒如叙徐升召匠床抄肖尚昇沼宵症祥称渉
+紹訟掌晶焦硝粧詔奨詳彰憧衝償礁鐘丈冗浄剰畳壌嬢錠譲醸拭殖飾触嘱辱尻伸芯辛侵津唇娠振浸紳診寝慎審震薪刃尽迅甚陣尋腎須吹炊帥粋衰酔遂睡穂随髄枢崇据杉裾瀬是姓征斉牲凄
+逝婿誓請醒斥析脊隻惜戚跡籍拙窃摂仙占扇栓旋煎羨腺詮践箋潜遷薦繊鮮禅漸膳繕狙阻租措粗疎訴塑遡礎双壮荘捜挿桑掃曹曽爽喪痩葬僧遭槽踪燥霜騒藻憎贈即促捉俗賊遜汰妥唾堕惰
+駄耐怠胎泰堆袋逮替滞戴滝択沢卓拓託濯諾濁但脱奪棚誰丹旦胆淡嘆端綻鍛弾壇恥致遅痴稚緻畜逐蓄秩窒嫡抽衷酎鋳駐弔挑彫眺釣貼超跳徴嘲澄聴懲勅捗沈珍朕陳鎮椎墜塚漬坪爪鶴呈
+廷抵邸亭貞帝訂逓偵堤艇締諦泥摘滴溺迭哲徹撤添塡殿斗吐妬途渡塗賭奴怒到逃倒凍唐桃透悼盗陶塔搭棟痘筒稲踏謄藤闘騰洞胴瞳峠匿督篤凸突屯豚頓貪鈍曇丼那謎鍋軟尼弐匂虹尿妊
+忍寧捻粘悩濃把覇婆罵杯排廃輩培陪媒賠伯拍泊迫剝舶薄漠縛爆箸肌鉢髪伐抜罰閥氾帆汎伴畔般販斑搬煩頒範繁藩蛮盤妃彼披卑疲被扉碑罷避尾眉微膝肘匹泌姫漂苗描猫浜賓頻敏瓶扶
+怖附訃赴浮符普腐敷膚賦譜侮舞封伏幅覆払沸紛雰噴墳憤丙併柄塀幣弊蔽餅壁璧癖蔑偏遍哺捕舗募慕簿芳邦奉抱泡胞俸倣峰砲崩蜂飽褒縫乏忙坊妨房肪某冒剖紡傍帽貌膨謀頬朴睦僕墨
+撲没勃堀奔翻凡盆麻摩磨魔昧埋膜枕又抹慢漫魅岬蜜妙眠矛霧娘冥銘滅免麺茂妄盲耗猛網黙紋冶弥厄躍闇喩愉諭癒唯幽悠湧猶裕雄誘憂融与誉妖庸揚揺溶腰瘍踊窯擁謡抑沃翼拉裸羅雷
+頼絡酪辣濫藍欄吏痢履璃離慄柳竜粒隆硫侶虜慮了涼猟陵僚寮療瞭糧厘倫隣瑠涙累塁励戻鈴零霊隷齢麗暦劣烈裂恋廉錬呂炉賂露弄郎浪廊楼漏籠麓賄脇惑枠湾腕
+`.replace(/\n/g, "").split("");
+
+const allKanji = () => chars1.concat(chars2,chars3,chars4,chars5,chars6,chars7);
+
+async function loadAllData(){
+  const allyFiles = ["basic.json","ex.json","rare.json","superrare.json","ultrarare.json","legendrare.json"];
+
+  const allyLoaded = await Promise.all(
+    allyFiles.map(f => fetch(f).then(r=>r.json()).catch(()=>[]))
+  );
+
+  allyData = allyLoaded.flat();
+  enemyData = await fetch("enemy.json").then(r=>r.json()).catch(()=>[]);
+
+  applyMode();
+}
+
+function applyMode(){
+  mode = document.getElementById("modeSelect").value;
+
+  document.getElementById("pageTitle").innerText =
+    mode === "ally" ? "味方文字検索" :
+    mode === "enemy" ? "敵文字検索" :
+    "敵味方統合文字検索";
+
+  document.getElementById("checkerTitle").innerText =
+    mode === "ally" ? "味方 新規漢字チェッカー" :
+    mode === "enemy" ? "敵 新規漢字チェッカー" :
+    "敵味方統合 新規漢字チェッカー";
+
+  data =
+    mode === "ally" ? flattenAlly(allyData) :
+    mode === "enemy" ? flattenEnemy(enemyData) :
+    flattenAlly(allyData).concat(flattenEnemy(enemyData));
+
+  initGrids();
+}
+
+function changeMode(){
+  document.getElementById("searchInput").value = "";
+  applyMode();
+}
+
+function flattenAlly(list){
+  return list.flatMap(ch =>
+    (ch.forms || []).map(f => ({
+      name:f.name || "",
+      description:f.description || "",
+      type:"ally"
+    }))
+  ).filter(f => f.name || f.description);
+}
+
+function flattenEnemy(list){
+  return list.map(f => ({
+    name:f.name || "",
+    description:f.description || "",
+    type:"enemy"
+  })).filter(f => f.name || f.description);
+}
+
+function normalize(str){
+  return (str || "").toLowerCase().normalize("NFKC").replace(/\s+/g,"").replace(/　/g,"");
+}
+
+function highlight(text,keyword){
+  if(!keyword) return text || "";
+  return String(text || "").replaceAll(keyword, `<span class="hit">${keyword}</span>`);
+}
+
+function isUsedIn(list,c){
+  return list.some(f => f.name.includes(c) || f.description.includes(c));
+}
+
+function getCharClass(c){
+  const ally = isUsedIn(flattenAlly(allyData), c);
+  const enemy = isUsedIn(flattenEnemy(enemyData), c);
+
+  if(mode === "ally") return ally ? "ally" : "";
+  if(mode === "enemy") return enemy ? "enemy" : "";
+  if(ally && enemy) return "both";
+  if(ally) return "ally";
+  if(enemy) return "enemy";
+  return "";
+}
+
+function initGrids(){
+  createGrid(chars1,"grid1");
+  createGrid(chars2,"grid2");
+  createGrid(chars3,"grid3");
+  createGrid(chars4,"grid4");
+  createGrid(chars5,"grid5");
+  createGrid(chars6,"grid6");
+  createGrid(chars7,"grid7");
+  createExtraKanji();
+  updateHeaders();
+}
+
+function createGrid(chars,id){
+  const grid = document.getElementById(id);
+  grid.innerHTML = "";
+
+  chars.forEach(c=>{
+    const div = document.createElement("div");
+    div.className = "char";
+    const cls = getCharClass(c);
+    if(cls) div.classList.add(cls);
+    div.innerText = c;
+    div.onclick = ()=>{
+      document.getElementById("searchInput").value = c;
+      search(c);
+    };
+    grid.appendChild(div);
+  });
+}
+
+function updateHeaders(){
+  const map = [
+    ["grid1","1年生で習う漢字"],
+    ["grid2","2年生で習う漢字"],
+    ["grid3","3年生で習う漢字"],
+    ["grid4","4年生で習う漢字"],
+    ["grid5","5年生で習う漢字"],
+    ["grid6","6年生で習う漢字"],
+    ["grid7","中学生で習う漢字"]
+  ];
+
+  map.forEach(([id,name])=>{
+    const grid = document.getElementById(id);
+    const used = [...grid.children].filter(d => d.classList.contains("ally") || d.classList.contains("enemy") || d.classList.contains("both")).length;
+    const total = grid.children.length;
+    grid.previousElementSibling.innerText = `▼ ${name} (${used}/${total})`;
+  });
+}
+
+function createExtraKanji(){
+  const extraGrid = document.getElementById("extraGrid");
+  extraGrid.innerHTML = "";
+
+  const normal = allKanji();
+
+  const chars = data.flatMap(f =>
+    splitChars(f.name).concat(splitChars(f.description))
+  );
+
+  const extra = [...new Set(
+    chars.filter(c => !normal.includes(c) && /[\u4E00-\u9FFF]/.test(c))
+  )];
+
+  document.getElementById("headerExtra").innerText =
+    `▼ 常用漢字外 ${extra.length}種類`;
+
+  extra.forEach(c=>{
+    const div = document.createElement("div");
+    div.className = "char";
+    const cls = getCharClass(c);
+    if(cls) div.classList.add(cls);
+    div.innerText = c;
+    div.onclick = ()=>{
+      document.getElementById("searchInput").value = c;
+      search(c);
+    };
+    extraGrid.appendChild(div);
+  });
+}
+
+function searchFromInput(){
+  const v = document.getElementById("searchInput").value.trim();
+  if(v) search(v);
+}
+
+function search(keyword){
+  lastMode = "search";
+  openResult();
+
+  const resultDiv = document.getElementById("result");
+  resultDiv.innerHTML = "";
+
+  const key = normalize(keyword);
+  let total = 0;
+
+  data.forEach(f=>{
+    if(normalize(f.name).includes(key) || normalize(f.description).includes(key)){
+      total++;
+
+      const div = document.createElement("div");
+      div.className = `result ${mode === "integrated" ? f.type : ""}`;
+
+      div.innerHTML = `
+        <strong>${highlight(f.name, keyword)}</strong><br>
+        ${highlight(f.description, keyword).replace(/\n/g,"<br>")}
+      `;
+
+      resultDiv.appendChild(div);
+    }
+  });
+
+  document.getElementById("selectedText").innerText =
+    total ? `"${keyword}" の検索結果 ${total}件見つかりました` :
+    `"${keyword}" は見つかりませんでした`;
+}
+
+function showAll(){
+  lastMode = "all";
+  openResult();
+
+  const resultDiv = document.getElementById("result");
+  resultDiv.innerHTML = "";
+
+  data.forEach(f=>{
+    const div = document.createElement("div");
+    div.className = `result ${mode === "integrated" ? f.type : ""}`;
+    div.innerHTML = `<strong>${f.name}</strong><br>${f.description.replace(/\n/g,"<br>")}`;
+    resultDiv.appendChild(div);
+  });
+
+  document.getElementById("selectedText").innerText =
+    `全キャラ一覧：${data.length}件`;
+}
+
+function showSingleOnly(){
+  lastMode = "single";
+  openResult();
+
+  const resultDiv = document.getElementById("result");
+  resultDiv.innerHTML = "";
+
+  let total = 0;
+
+  allKanji().forEach(c=>{
+    let count = 0;
+    let foundName = "";
+
+    data.forEach(f=>{
+      if(f.name.includes(c) || f.description.includes(c)){
+        count++;
+        foundName = f.name;
+      }
+    });
+
+    if(count === 1){
+      total++;
+      const div = document.createElement("div");
+      div.className = "result";
+      div.innerHTML = `<strong>${c}</strong> ： ${foundName}`;
+      div.onclick = ()=>{
+        singleScrollY = document.getElementById("result").scrollTop;
+        document.getElementById("searchInput").value = c;
+        search(c);
+      };
+      resultDiv.appendChild(div);
+    }
+  });
+
+  document.getElementById("selectedText").innerText =
+    `1件しかヒットしない文字一覧：${total}件`;
+}
+
+function showRanking(){
+  lastMode = "ranking";
+  openResult();
+
+  const resultDiv = document.getElementById("result");
+  resultDiv.innerHTML = "";
+
+  const list = allKanji().map(c=>{
+    let count = 0;
+    data.forEach(f=>{
+      if(f.name.includes(c) || f.description.includes(c)) count++;
+    });
+    return {char:c,count};
+  }).filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
+
+  let rank = 0;
+  let prev = -1;
+
+  list.forEach((item,i)=>{
+    if(item.count !== prev){
+      rank = i + 1;
+      prev = item.count;
+    }
+
+    const div = document.createElement("div");
+    div.className = "result";
+    div.innerHTML = `${rank}位　<strong>${item.char}</strong>（${item.count}件）`;
+    div.onclick = ()=>{
+      rankingScrollY = document.getElementById("result").scrollTop;
+      document.getElementById("searchInput").value = item.char;
+      search(item.char);
+    };
+    resultDiv.appendChild(div);
+  });
+
+  document.getElementById("selectedText").innerText =
+    "出現数ランキング";
+}
+
+function runChecker(){
+  const text = document.getElementById("checkerInput").value;
+  const resultDiv = document.getElementById("checkerResult");
+  resultDiv.innerHTML = "";
+
+  const unique = [...new Set(
+    splitChars(text).filter(c => /[\u4E00-\u9FFF]/.test(c))
+  )];
+
+  if(!unique.length){
+    resultDiv.innerText = "漢字が見つかりませんでした";
+    return;
+  }
+
+  const existing = [];
+  const newChars = [];
+
+  unique.forEach(c=>{
+    let count = 0;
+    data.forEach(f=>{
+      if(f.name.includes(c) || f.description.includes(c)) count++;
+    });
+
+    if(count) existing.push(`${c}(${count}回)`);
+    else newChars.push(c);
+  });
+
+  let html = "";
+  if(existing.length) html += `既存：${existing.join("、")}<br>`;
+  if(newChars.length) html += `<span style="color:red;">新規：${newChars.join("、")}</span>`;
+  resultDiv.innerHTML = html;
+}
+
+function clearChecker(){
+  document.getElementById("checkerInput").value = "";
+  document.getElementById("checkerResult").innerHTML = "";
+}
+
+function showChecker(){
+  document.getElementById("menu").style.display = "none";
+  document.getElementById("searchScreen").style.display = "none";
+  document.getElementById("resultScreen").style.display = "none";
+  document.getElementById("checkerScreen").style.display = "block";
+}
+
+function backFromChecker(){
+  document.getElementById("checkerScreen").style.display = "none";
+  document.getElementById("searchScreen").style.display = "block";
+}
+
+function openResult(){
+  scrollY = window.scrollY;
+  document.getElementById("searchScreen").style.display = "none";
+  document.getElementById("checkerScreen").style.display = "none";
+  document.getElementById("resultScreen").style.display = "block";
+  document.getElementById("result").innerHTML = "";
+  window.scrollTo(0,0);
+}
+
+function back(){
+  document.getElementById("resultScreen").style.display = "none";
+  document.getElementById("searchScreen").style.display = "block";
+  window.scrollTo(0,scrollY);
+}
+
+function toggle(id,header){
+  const el = document.getElementById(id);
+  const open = el.style.display === "none";
+  el.style.display = open ? "grid" : "none";
+  header.innerHTML = header.innerHTML.replace(open ? "▶" : "▼", open ? "▼" : "▶");
+}
+
+function toggleMenu(){
+  const menu = document.getElementById("menu");
+  menu.style.display = menu.style.display === "none" ? "block" : "none";
+}
+
+document.addEventListener("click",e=>{
+  const menu = document.getElementById("menu");
+  if(!e.target.closest("#menu") && !e.target.closest("button")){
+    menu.style.display = "none";
+  }
+});
+
+window.addEventListener("load",()=>{
+  document.getElementById("searchInput").addEventListener("keydown",e=>{
+    if(e.isComposing || e.keyCode === 229) return;
+    if(e.key === "Enter") searchFromInput();
+  });
+
+  loadAllData();
+});
+</script>
+
+</body>
+</html>
